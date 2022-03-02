@@ -1,0 +1,166 @@
+---
+title: "A6_LI_ZHIJUN_Alignments"
+author: "Zhijun Li"
+date: '2022-03-01'
+output: pdf_document
+---
+
+### GitHub Link: https://github.com/zazauwu/A6_Alignments
+
+```{r message=FALSE, warning=FALSE}
+# load the required packages
+library(dplyr)
+library(BiocManager)
+library(Biostrings)
+library(genbankr)
+library(rentrez)
+```
+
+# Sequence Analysis
+## Input the sequence
+```{r}
+#load the human isolate, unknown sequence
+unknseq <- "ATGTCTGATAATGGACCCCAAAATCAGCGAAATGCACCCCGCATTACGTTTGGTGGACCCTCAGATTCAA
+CTGGCAGTAACCAGAATGGAGAACGCAGTGGGGCGCGATCAAAACAACGTCGGCCCCAAGGTTTACCCAA
+TAATACTGCGTCTTGGTTCACCGCTCTCACTCAACATGGCAAGGAAGACCTTAAATTCCCTCGAGGACAA
+GGCGTTCCAATTAACACCAATAGCAGTCCAGATGACCAAATTGGCTACTACCGAAGAGCTACCAGACGAA
+TTCGTGGTGGTGACGGTAAAATGAAAGATCTCAGTCCAAGATGGTATTTCTACTACCTAGGAACTGGGCC
+AGAAGCTGGACTTCCCTATGGTGCTAACAAAGACGGCATCATATGGGTTGCAACTGAGGGAGCCTTGAAT
+ACACCAAAAGATCACATTGGCACCCGCAATCCTGCTAACAATGCTGCAATCGTGCTACAACTTCCTCAAG
+GAACAACATTGCCAAAAGGCTTCTACGCAGAAGGGAGCAGAGGCGGCAGTCAAGCCTCTTCTCGTTCCTC
+ATCACGTAGTCGCAACAGTTCAAGAAATTCAACTCCAGGCAGCAGTAGGGGAACTTCTCCTGCTAGAATG
+GCTGGCAATGGCGGTGATGCTGCTCTTGCTTTGCTGCTGCTTGACAGATTGAACCAGCTTGAGAGCAAAA
+TGTCTGGTAAAGGCCAACAACAACAAGGCCAAACTGTCACTAAGAAATCTGCTGCTGAGGCTTCTAAGAA
+GCCTCGGCAAAAACGTACTGCCACTAAAGCATACAATGTAACACAAGCTTTCGGCAGACGTGGTCCAGAA
+CAAACCCAAGGAAATTTTGGGGACCAGGAACTAATCAGACAAGGAACTGATTACAAACATTGGCCGCAAA
+TTGCACAATTTGCCCCCAGCGCTTCAGCGTTCTTCGGAATGTCGCGCATTGGCATGGAAGTCACACCTTC
+GGGAACGTGGTTGACCTACACAGGTGCCATCAAATTGGATGACAAAGATCCAAATTTCAAAGATCAAGTC
+ATTTTGCTGAATAAGCATATTGACGCATACAAAACATTCCCACCAACAGAGCCTAAAAAGGACAAAAAGA
+AGAAGGCTGATGAAACTCAAGCCTTACCGCAGAGACAGAAGAAACAGCAAACTGTGACTCTTCTTCCTGC
+TGCAGATTTGGATGATTTCTCCAAACAATTGCAACAATCCATGAGCAGTGCTGACTCAACTCAGGCCTAA"
+
+#use regular expression 'gsub' to remove the 'carriage return' and 'newline' special character
+unknseq <- gsub("[\r\n]", "", unknseq)
+
+unknseq
+```
+
+## Generate alignments
+```{r}
+# pairwise alignments
+library(annotate)
+useqBLAST <- blastSequences(paste(unknseq),as = 'data.frame',
+                            hitListSize = 20, timeout = 600)
+```
+
+```{r}
+# multiple alignments
+library(ape)
+# create a DNAbin object
+useqHitsDF <- data.frame(ID = useqBLAST$Hit_accession, # specifying an ID column
+                         Seq = useqBLAST$Hsp_hseq,
+                         stringsAsFactors = FALSE)
+```
+
+```{r}
+# length of each sequence
+useqBLAST$Hit_len
+```
+The 20 sequences have similar number of base pairs.
+
+## Determine if it is human or other organism
+```{r}
+# read in the obtained 20 sequences from GenBank using the read.Genbank()
+useqHitSeqs <- read.GenBank(useqBLAST$Hit_accession)
+
+# take a look at the species
+attr(useqHitSeqs,"species")
+```
+
+The isolated sequence is identified as Severe acute respiratory syndrome-related coronavirus 2 instead of human.
+
+```{r}
+# convert DNAbin to a DNAStringSet for an alignment
+library(Biostrings)
+CovDNAstring <- useqHitsDF$Seq %>% 
+  as.character %>% # convert to strings
+  lapply(., paste0, collapse = "") %>%  # collaspe each sequence to a single string
+  unlist %>% # flatten list to a vector
+  DNAStringSet # convert the vector to the required DNAStringSet object
+```
+
+```{r}
+# give each sequence a unique names
+names(CovDNAstring) <- paste(1:nrow(useqHitsDF),useqHitsDF$ID,sep="_")
+```
+
+```{r}
+# use MUSCLE (MUltiple Sequence Comparison by Log-Expectation) to align the sequences
+library(muscle)
+# create a DNAMultipleAlignment object
+CovAlign <- muscle::muscle(stringset = CovDNAstring, quiet = T)
+
+CovAlign
+```
+
+```{r}
+# convert the DNAMultipleAlignment object to a DNAbin
+CovAlignBin <- as.DNAbin(CovAlign)
+
+#perform a series of diagnostics on a DNA alignement
+checkAlignment(CovAlignBin)
+```
+
+```{r}
+SeqLen <- as.numeric(lapply(CovDNAstring, length))
+
+# plot the distribution of sequence length
+library(ggplot2)
+qplot(SeqLen) + theme_bw()
+```
+Based on the alignment and the distribution, it looks like there is neither distinct gap nor substitution across all the 20 subject sequences, hence, there is no need to remove any sequence.
+
+## Build a phylogeny
+```{r}
+# make distance matrix for tree
+CDM <- dist.dna(CovAlignBin, model = "K80")
+CDMmat <- as.matrix(CDM)
+
+# rearrange CDMmat to a 'linear' matrix
+library(reshape2)
+PDat <- melt(CDMmat)
+
+ggplot(data = PDat, aes(x = Var1, y = Var2, fill = value)) + 
+  geom_tile() + 
+  scale_fill_gradientn(colours=c("white","blue","green","red")) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+```
+Figure 1. The variation among the 20 subject sequences based on distance matrix. All of them share complete similarity with each other.
+
+# Report
+Given the results from BLAST and alignment, it should be concerned that the human isolated sequence is from the coronavirus SARS-CoV-2 which can trigger serve respiratory symptoms.
+```{r}
+# create a phylogenetic tree using the Neighbour-Joining (NJ) approach
+CovTree <- nj(CDMmat)
+
+# plot the phylogenetic tree
+library(ggtree)
+ggtree(CovTree)
+```
+Figure 2. Phylogenetic tree of the 20 sequences. It suggests that these sequences are closely related and fall into the same strain.
+
+```{r}
+# remove the branch length info to focus on the relationships
+ggtree(CovTree, branch.length='none', layout="circular") + geom_tiplab()
+```
+Figure 3. Relationship among the 20 sequences. It suggests that each sequence, though of the same SARS-CoV-2 virus strain, contains a number of differences.
+
+
+```{r}
+# save the tree
+write.tree(CovTree,"A6_LI_ZHIJUN_Cov2_tree.tre")
+```
+
+
+
+
